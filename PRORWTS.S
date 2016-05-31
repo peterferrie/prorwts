@@ -47,7 +47,9 @@
 }
                 sizelo    = $f5         ;must set if writing
                 sizehi    = $f6         ;must set if writing
+!if might_exist=1 {
                 entries   = $f7         ;total number of entries
+}
                 reqcmd    = $f8         ;used if enable_write=1, 1=read, 2=write
                 ldrlo     = $f9         ;used if override_adr=1
                 ldrhi     = $fa         ;used if override_adr=1
@@ -249,15 +251,15 @@ copydrv         stx A1H
                 stx A3H
                 sty A3L
   } ;enable_write
-    !if load_high=1 {
-      !if lc_bank=1 {
+  !if load_high=1 {
+    !if lc_bank=1 {
                 lda $c089
                 lda $c089
-      } else { ;lc_bank
+    } else { ;lc_bank
                 lda $c081
                 lda $c081
-      } ;lc_bank
-    } ;load_high
+    } ;lc_bank
+  } ;load_high
                 ldy #0
 minus03         lda (A1L), y
                 sta reloc, y
@@ -272,12 +274,12 @@ minus03         lda (A1L), y
                 plp
                 bne plus07
                 ldx #3
-minus04         stx $3c
+minus04         stx A1L
                 txa
                 asl
-                bit $3c
+                bit A1L
                 beq plus06
-                ora $3c
+                ora A1L
                 eor #$ff
                 and #$7e
 minus05         bcs plus06
@@ -335,10 +337,12 @@ unrblockhi=unrelocdsk+(*-reloc)
 
                 ;include volume directory header in count
 
-readdir         ldx dirbuf+37
+readdir
+  !if might_exist=1 {
+                ldx dirbuf+37
                 inx
                 stx entries
-
+  }
   !if allow_subdir=1 {
                 ldy #0
   } ;allow_subdir
@@ -543,14 +547,14 @@ plus15
                 ;restore load offset
 
 plus16
-  !if override_adr=0 {
+  !if override_adr=1 {
+                ldx ldrhi
+                lda ldrlo
+  } else { ;override_adr
                 pla
                 tax
                 pla
-  } else { ;override_adr
-                ldx ldrhi
-                lda ldrlo
-  }
+  } ;override_adr
   !if enable_write=1 {
                 ldy reqcmd
   } ;enable_write
@@ -656,12 +660,16 @@ plus19          sty secsize
 
                 ;if track does not match, then seek
 
-                lda curtrk
-                cmp phase
+                ldx curtrk
+                cpx phase
                 beq checksec
                 jsr seek
 
-                ;[re-]read sector
+                ;force sector mismatch
+
+                lda #$ff
+
+                ;match or read sector
 
 checksec        jsr cmpsec
 
@@ -680,13 +688,14 @@ checksec        jsr cmpsec
                 inc reqsec
                 inc reqsec
 
+cmpsecrd        jsr readadr
+
 cmpsec
   !if enable_write=1 {
                 ldy command
                 dey
                 bne encsec
   } ;enable_write
-cmpsecrd        jsr readadr
                 cmp reqsec
                 bne cmpsecrd
 
@@ -727,20 +736,19 @@ readret         rts
 
   !if enable_write=1 {
 encsec          iny
-minus11         ldx #0
+minus11         ldx #$aa
 minus12         dey
                 lda (adrlo), y
                 lsr
-                rol bit2tbl, x
+                rol bit2tbl-$aa, x
                 lsr
-                rol bit2tbl, x
+                rol bit2tbl-$aa, x
                 sta encbuf, y
-                lda bit2tbl, x
+                lda bit2tbl-$aa, x
                 and #$3f
-                sta bit2tbl, x
+                sta bit2tbl-$aa, x
                 inx
-                cpx #$56
-                bcc minus12
+                bne minus12
                 tya
                 bne minus11
 
@@ -784,11 +792,11 @@ unrlatch2=unrelocdsk+(*-reloc)
                 sta $c0ed
 unrread5=unrelocdsk+(*-reloc)
                 lda $c0ec
-                asl phase ;7 cycles
+                lsr phase ;7 cycles
                 lda bit2tbl-1, y
                 dey
                 bne minus16
-minus17         asl phase ;7 cycles
+minus17         lsr phase ;7 cycles
                 eor encbuf, y
                 tax
                 lda xlattbl, x
@@ -865,6 +873,7 @@ seekret         rts
 
 seek            sty step
                 asl phase
+                txa
                 asl
 copy_cur        tax
                 sta tmptrk
@@ -949,10 +958,12 @@ unrhddblockhi=unrelochdd+(*-reloc)
 
                 ;include volume directory header in count
 
-hddreaddir      ldy dirbuf+37
-                iny
-                sty entries
-
+hddreaddir
+  !if might_exist=1 {
+                ldx dirbuf+37
+                inx
+                stx entries
+  }
   !if allow_subdir=1 {
                 lda #0
   } ;allow_subdir
@@ -1167,13 +1178,13 @@ plus34
                 ;restore load offset
 
 plus35
-  !if override_adr=0 {
+  !if override_adr=1 {
+                ldx ldrhi
+                lda ldrlo
+  } else { ;override_adr
                 pla
                 tax
                 pla
-  } else { ;override_adr
-                ldx ldrhi
-                lda ldrlo
   } ;override_adr
 
   !if allow_subdir=1 {
