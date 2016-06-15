@@ -9,9 +9,11 @@
                 enable_write = 0        ;set to 1 to enable write support
                                         ;file must exist already and its size cannot be altered
                                         ;writes occur in multiples of block size (256 bytes for floppy, 512 bytes for HDD)
+                allow_multi  = 1        ;set to 1 to allow multiple floppies
                 allow_subdir = 0        ;set to 1 to allow opening subdirectories to access files
                 might_exist  = 0        ;set to 1 if file is not known to always exist already
                                         ;makes use of status to indicate success or failure
+                allow_aux    = 0        ;set to 1 to allow read/write directly to/from aux memory
                 load_high    = 0        ;load into banked RAM instead of main RAM
                 lc_bank      = 1        ;load into specified bank (1 or 2) if load_high=1
 
@@ -43,14 +45,15 @@
                 secsize2  = $48
 
 !if might_exist=1 {
-                status    = $f4         ;returns non-zero on error
+                status    = $f3         ;returns non-zero on error
+}
+!if allow_aux=1 {
+                auxreq    = $f4         ;set to 1 to read/write aux memory, else main memory is used
 }
                 sizelo    = $f5         ;must set if writing
                 sizehi    = $f6         ;must set if writing
-!if might_exist=1 {
                 entries   = $f7         ;total number of entries
-}
-                reqcmd    = $f8         ;used if enable_write=1, 1=read, 2=write
+                reqcmd    = $f8         ;used if enable_write=1, 1=read, 2=write; if allow_multi=1, bit 7 selects drive
                 ldrlo     = $f9         ;used if override_adr=1
                 ldrhi     = $fa         ;used if override_adr=1
                 namlo     = $fb
@@ -103,22 +106,25 @@ init            jsr $fe93
                 tax
                 inx
                 stx unrdrvon+1
-                eor #4
-                sta unrread1+1
-                sta unrread2+1
-                sta unrread3+1
+                inx
+  !if allow_multi=1 {
+                stx unrdrvsel+1
+  } ;allow_multi
+                inx
+                inx
+                stx unrread1+1
+                stx unrread2+1
+                stx unrread3+1
   !if enable_write=1 {
-                sta unrread4+1
-                sta unrread5+1
-                sta unrread6+1
-                sta unrread7+1
-                sta unrread8+1
-                tax
+                stx unrread4+1
+                stx unrread5+1
+                stx unrread6+1
+                stx unrread7+1
+                stx unrread8+1
                 inx
                 stx unrlatch1+1
                 stx unrlatch2+1
                 stx unrlatch3+1
-                stx unrlatch4+1
                 inx
                 stx unrlatchin+1
                 inx
@@ -273,7 +279,7 @@ minus03         lda (A1L), y
                 bne minus03
                 plp
                 bne plus07
-                ldx #3
+                ldx #$16
 minus04         stx A1L
                 txa
                 asl
@@ -286,7 +292,7 @@ minus05         bcs plus06
                 lsr
                 bne minus05
                 tya
-                sta nibtbl, x
+                sta nibtbl-$16, x
   !if enable_write=1 {
                 txa
                 ora #$80
@@ -299,6 +305,15 @@ plus07          rts
 } else { ;enable_floppy
 slot            lda $cfff
                 sta unrentry+1
+  !if load_high=1 {
+    !if lc_bank=1 {
+                lda $c089
+                lda $c089
+    } else { ;lc_bank
+                lda $c081
+                lda $c081
+    } ;lc_bank
+  } ;load_high
                 ldy #0
 -               lda unrelochdd, y
                 sta reloc, y
@@ -329,6 +344,16 @@ opendir         ;read volume directory key block
   } ;enable_write
                 stx adrlo
                 stx secsize1
+
+  !if allow_multi=1 {
+                asl reqcmd
+                bcc seldrive
+                inx
+seldrive        lsr reqcmd
+unrdrvsel=unrelocdsk+(*-reloc)
+                lda $c0ea, x
+  } ;allow_multi
+
 unrblocklo=unrelocdsk+(*-reloc)
                 lda #2
 unrblockhi=unrelocdsk+(*-reloc)
@@ -514,7 +539,6 @@ plus15
   } ;override_adr
 
                 ;cache KEY_POINTER (loaded backwards)
-                ;and construct single-entry index block in case of seedling
 
                 ldy #$12
                 lda (A1L), y
@@ -524,9 +548,7 @@ plus15
                 lda (A1L), y
                 sta dirbuf
                 ldy #0
-                sty dirbuf+257
-                sty dirbuf+1
-                sty namlo
+                sty entries
 
                 ;read index block in case of sapling
 
@@ -578,6 +600,12 @@ plus17
                 sta adrlo
                 stx adrhi
 
+  !if allow_aux=1 {
+                ldx auxreq
+                sta $c002, x
+                sta $c004, x
+  }
+
                 ;set read size to min(length, $200)
 
 readfile        lda sizelo
@@ -591,8 +619,8 @@ plus18          sta secsize1
 
                 ;fetch data block and read it
 
-                ldy namlo
-                inc namlo
+                ldy entries
+                inc entries
                 lda dirbuf, y
                 ldx dirbuf+256, y
                 jsr seekread
@@ -619,6 +647,91 @@ plus18          sta secsize1
 
 unrdrvoff=unrelocdsk+(*-reloc)
 readdone        lda $c0e8
+  !if allow_aux=1 {
+                sta $c002
+                sta $c004
+  }
+seekret         rts
+
+                ;no tricks here, just the regular stuff
+
+seek            sty step
+                asl phase
+                txa
+                asl
+copy_cur        tax
+                sta tmptrk
+                sec
+                sbc phase
+                beq seekret
+                bcs plus20
+                eor #$ff
+                inx
+                bcc plus21
+plus20          sbc #1
+                dex
+plus21          cmp step
+                bcc plus22
+                lda step
+plus22          cmp #8
+                bcs plus23
+                tay
+                sec
+plus23          txa
+                pha
+                ldx step1, y
+                bne plus24
+minus24         clc
+                lda tmptrk
+                ldx step2, y
+plus24          stx tmpsec
+                and #3
+                rol
+                tax
+unrseek=unrelocdsk+(*-reloc)
+                sta $c0e0, x
+minus25         ldx #$13
+minus26         dex
+                bne minus26
+                dec tmpsec
+                bne minus25
+                lsr
+                bcs minus24
+                pla
+                inc step
+                bne copy_cur
+
+step1           !byte 1, $30, $28, $24, $20, $1e, $1d, $1c
+step2           !byte $70, $2c, $26, $22, $1f, $1e, $1d, $1c
+
+readadr
+minus19         jsr readd5aa
+                cmp #$96
+                bne minus19
+                ldy #3
+minus20         sta curtrk
+                jsr readnib
+                rol
+                sta tmpsec
+                jsr readnib
+                and tmpsec
+                dey
+                bne minus20
+                rts
+
+readd5aa
+minus21         jsr readnib
+minus22         cmp #$d5
+                bne minus21
+                jsr readnib
+                cmp #$aa
+                bne minus22
+                tay                    ;we need Y=#$AA later
+
+readnib
+unrread3=unrelocdsk+(*-reloc)
+minus23         lda $c0ec
+                bpl minus23
                 rts
 
 readdirsec
@@ -707,14 +820,14 @@ readdata        jsr readd5aa
 unrread1=unrelocdsk+(*-reloc)
 minus07         ldx $c0ec
                 bpl minus07
-                eor nibtbl-$80, x
+                eor nibtbl-$96, x
                 sta bit2tbl-$aa, y
                 iny
                 bne minus07
 unrread2=unrelocdsk+(*-reloc)
 minus08         ldx $c0ec
                 bpl minus08
-                eor nibtbl-$80, x
+                eor nibtbl-$96, x
                 sta (adrlo), y          ;the real address
                 iny
                 cpy secsize
@@ -755,63 +868,67 @@ minus12         dey
 cmpsecwr        jsr readadr
                 cmp reqsec
                 bne cmpsecwr
-                ldy #(epilog_e-epilog)
-minus13         jsr readnib
-                cmp epilog-1, y
-                bne minus13
-                dey
-                bne minus13
+
+                ;skip tail #$DE #$AA #$EB some #$FFs ...
+
+                ldy #$24
+minus13         dey
+                bpl minus13
 
                 ;write sector data
 
-unrlatch1=unrelocdsk+(*-reloc)
-                lda $c0ed
-                lda #$ff
+                tya
+                ldx #$56
 unrlatchout=unrelocdsk+(*-reloc)
                 sta $c0ef
 unrread4=unrelocdsk+(*-reloc)
                 ora $c0ec
-                nop       ;2 cycles
-                lsr phase ;7 cycles
                 ldy #4
+                cmp $ea     ;3 cycles
+                cmp ($ea,x) ;6 cycles
 minus14         jsr writenib1
                 dey
                 bne minus14
-                cmp $ea   ;3 cycles
                 ldy #(prolog_e-prolog)
+                cmp $ea     ;3 cycles
 minus15         lda prolog-1, y
                 jsr writenib3
                 dey
                 bne minus15
                 tya
-                ldy #$56
-minus16         eor bit2tbl-1, y
-                tax
-                lda xlattbl, x
-unrlatch2=unrelocdsk+(*-reloc)
+                !byte $c5   ;(1 cycle), turns into cmp $ea and 3 cycles
+minus16         nop         ;2 cycles
+                cmp $ea     ;3 cycles
+                eor bit2tbl-1, x
+                tay
+                lda xlattbl, y
+unrlatch1=unrelocdsk+(*-reloc)
                 sta $c0ed
 unrread5=unrelocdsk+(*-reloc)
                 lda $c0ec
-                lsr phase ;7 cycles
-                lda bit2tbl-1, y
-                dey
+                lda bit2tbl-1, x
+                dex
                 bne minus16
-minus17         lsr phase ;7 cycles
-                eor encbuf, y
-                tax
-                lda xlattbl, x
-unrlatch3=unrelocdsk+(*-reloc)
+                !byte $c5   ;(1 cycle), turns into cmp $ea and 3 cycles
+minus17         nop         ;2 cycles
+                cmp $ea     ;3 cycles
+                eor encbuf, x
+                tay
+                lda xlattbl, y
+unrlatch2=unrelocdsk+(*-reloc)
                 sta $c0ed
 unrread6=unrelocdsk+(*-reloc)
                 lda $c0ec
-                lda encbuf, y
-                iny
+                lda encbuf, x
+                inx
                 bne minus17
                 tax
                 lda xlattbl, x
-                jsr writenib2
-                cmp $ea   ;3 cycles
+                nop         ;2 cycles
+                nop         ;2 cycles
+                jsr writenib4
                 ldy #(epilog_e-epilog)
+                cmp $ea ;3 cycles
 minus18         lda epilog-1, y
                 jsr writenib3
                 dey
@@ -822,13 +939,11 @@ unrread7=unrelocdsk+(*-reloc)
                 lda $c0ec
                 rts
 
-writenib1       lsr phase ;7 cycles
-                cmp $ea   ;3 cycles
-                !byte $c9 ;2 cycles
-writenib2       !byte $c9 ;2 cycles
-writenib3       cmp $ea   ;3 cycles
-
-unrlatch4=unrelocdsk+(*-reloc)
+writenib1       cmp ($ea,x) ;6 cycles
+writenib2       cmp ($ea,x) ;6 cycles
+writenib3       cmp $ea     ;3 cycles
+writenib4
+unrlatch3=unrelocdsk+(*-reloc)
                 sta $c0ed
 unrread8=unrelocdsk+(*-reloc)
                 ora $c0ec
@@ -838,100 +953,21 @@ prolog_e
 epilog          !byte $ff, $eb, $aa, $de
 epilog_e
   } ;enable_write
-
-                ;no tricks here, just the regular stuff
-
-readadr
-minus19         jsr readd5aa
-                cmp #$96
-                bne minus19
-                ldy #3
-minus20         sta curtrk
-                jsr readnib
-                rol
-                sta tmpsec
-                jsr readnib
-                and tmpsec
-                dey
-                bne minus20
-                rts
-
-readd5aa
-minus21         jsr readnib
-minus22         cmp #$d5
-                bne minus21
-                jsr readnib
-                cmp #$aa
-                bne minus22
-                tay                    ;we need Y=#$AA later
-
-readnib
-unrread3=unrelocdsk+(*-reloc)
-minus23         lda $c0ec
-                bpl minus23
-seekret         rts
-
-seek            sty step
-                asl phase
-                txa
-                asl
-copy_cur        tax
-                sta tmptrk
-                sec
-                sbc phase
-                beq seekret
-                bcs plus20
-                eor #$ff
-                inx
-                bcc plus21
-plus20          sbc #1
-                dex
-plus21          cmp step
-                bcc plus22
-                lda step
-plus22          cmp #8
-                bcs plus23
-                tay
-                sec
-plus23          txa
-                pha
-                ldx step1, y
-                bne plus24
-minus24         clc
-                lda tmptrk
-                ldx step2, y
-plus24          stx tmpsec
-                and #3
-                rol
-                tax
-unrseek=unrelocdsk+(*-reloc)
-                sta $c0e0, x
-minus25         ldx #$13
-minus26         dex
-                bne minus26
-                dec tmpsec
-                bne minus25
-                lsr
-                bcs minus24
-                pla
-                inc step
-                bne copy_cur
-
-step1           !byte 1, $30, $28, $24, $20, $1e, $1d, $1c
-step2           !byte $70, $2c, $26, $22, $1f, $1e, $1d, $1c
-
-nibtbl          = *
-bit2tbl         = nibtbl+128
   !if enable_write=1 {
-xlattbl         = bit2tbl+86
+!align 255,0
+  } ;enable_write
+bit2tbl         = *
+nibtbl          = bit2tbl+86
+  !if enable_write=1 {
+xlattbl         = nibtbl+106
 dataend         = xlattbl+64
   } else { ;enable_write
-dataend         = bit2tbl+86
+dataend         = nibtbl+106
   } ;enable_write
 ;hack to error out when code is too large for current address
   !if reloc<$c000 {
     !if dataend>$c000 {
-      1=*
+      !serious "code is too large"
     }
   }
 } ;enable_floppy
@@ -1145,7 +1181,6 @@ plus34
   } ;override_adr
 
                 ;cache KEY_POINTER (loaded backwards)
-                ;and construct single-entry index block in case of seedling
 
                 ldy #$12
                 lda (A1L), y
@@ -1155,9 +1190,7 @@ plus34
                 lda (A1L), y
                 sta dirbuf
                 ldy #0
-                sty dirbuf+257
-                sty dirbuf+1
-                sty namlo
+                sty entries
 
                 ;read index block in case of sapling
 
@@ -1204,6 +1237,12 @@ plus36
                 sta adrlo
                 stx adrhi
 
+  !if allow_aux=1 {
+                ldx auxreq
+                sta $c002, x
+                sta $c004, x
+  } ;allow_aux
+
                 ;set read size to min(length, $200)
 
 hddreadfile
@@ -1229,8 +1268,8 @@ plus37          php
 
                 ;fetch data block and read it
 
-                ldy namlo
-                inc namlo
+                ldy entries
+                inc entries
                 lda dirbuf, y
                 ldx dirbuf+256, y
                 jsr hddseekread
@@ -1244,6 +1283,11 @@ plus37          php
                 bcc plus38
                 lda sizelo
                 bne hddreadfile
+  !if allow_aux=1 {
+hddreaddone
+                sta $c002
+                sta $c004
+  } ;allow_aux
                 rts
 
 plus38          pla
@@ -1260,15 +1304,25 @@ minus28         lda (adrlo), y
                 sta (A1L), y
                 iny
                 bne minus28
-                inc adrhi
                 inc A1H
-plus39
+                inc adrhi
+plus39          lda sizelo
+  !if allow_aux=1 {
+                beq hddreaddone
+  } else {
+                beq plus40
+  } ;allow_aux
 minus29         lda (adrlo), y
                 sta (A1L), y
                 iny
                 cpy sizelo
                 bne minus29
+  !if allow_aux=1 {
+                beq hddreaddone
+  } else {
+plus40
                 rts
+  } ;allow_aux
 
 hddreaddirsec   ldy #1
                 sty command
