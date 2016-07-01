@@ -892,6 +892,9 @@ minus21         dey
                 lsr
                 rol bit2tbl-$aa, x
                 sta encbuf, y
+                lda bit2tbl-$aa, x
+                and #$3f
+                sta bit2tbl-$aa, x
                 inx
                 bne minus21
                 tya
