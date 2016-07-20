@@ -184,9 +184,9 @@ plus01          pla
                 ;there can be only one page crossed, so we can increment instead of adc
 
                 inc A1H
-plus02          inc A2L
-                lda A2L
-                cmp #$0d
+plus02          cmp #<(readbuf+$1ff) ;4+($27*$0d)
+                lda A1H
+                sbc #>(readbuf+$1ff)
                 bcc inextent
 
                 ;read next directory block when we reach the end of this block
@@ -360,8 +360,7 @@ readdir
                 sty status
                 sty A2H
   }
-firstent        sty A2L
-                lda #<(dirbuf+4)
+firstent        lda #<(dirbuf+4)
                 sta A1L
                 lda #>(dirbuf+4)
                 sta A1H
@@ -436,9 +435,9 @@ plus10          lda A1L
                 ;there can be only one page crossed, so we can increment instead of adc
 
                 inc A1H
-plus11          inc A2L
-                lda A2L
-                cmp #$0d
+plus11          cmp #<(dirbuf+$1ff) ;4+($27*$0d)
+                lda A1H
+                sbc #>(dirbuf+$1ff)
                 bcc nextent
 
                 ;read next directory block when we reach the end of this block
@@ -482,12 +481,11 @@ plus12
                 ;round file size up to nearest sector
                 ;and check against requested size if writing
 
-                tay
                 beq plus13
                 lda sizelo
                 beq plus14
-                ldy #0
-plus13          sty sizelo
+                lda #0
+plus13          sta sizelo
                 inc sizehi
 
                 ;set read size to min(length, requested size)
@@ -1059,8 +1057,7 @@ hddreaddir
                 sta status
                 sta A2H
   } ;might_exist
-hddfirstent     sta A2L
-                lda #<(dirbuf+4)
+hddfirstent     lda #<(dirbuf+4)
                 sta A1L
                 lda #>(dirbuf+4)
                 sta A1H
@@ -1136,9 +1133,9 @@ plus29          lda A1L
                 ;there can be only one page crossed, so we can increment instead of adc
 
                 inc A1H
-plus30          inc A2L
-                lda A2L
-                cmp #$0d
+plus30          cmp #<(dirbuf+$1ff) ;4+($27*$0d)
+                lda A1H
+                sbc #>(dirbuf+$1ff)
                 bcc hddnextent
 
                 ;read next directory block when we reach the end of this block
