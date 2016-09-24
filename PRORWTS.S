@@ -28,6 +28,7 @@
 
                 ;options
                 enable_floppy = 0       ;set to 1 to enable floppy drive support
+                poll_drive   = 0        ;set to 1 to check if disk is in drive
                 override_adr = 0        ;set to 1 to require an explicit load address
                 aligned_read = 0        ;set to 1 if all reads can be a multiple of block size
                 enable_write = 0        ;set to 1 to enable write support
@@ -146,7 +147,10 @@ init            jsr SETVID
                 sta unrdrvoff2+1
                 tax
                 inx ;MOTORON
-                stx unrdrvon+1
+  !if poll_drive=1 {
+                stx unrdrvon1+1
+  } ;poll_drive
+                stx unrdrvon2+1
                 inx ;DRV0EN
   !if allow_multi=1 {
                 stx unrdrvsel+1
@@ -154,10 +158,14 @@ init            jsr SETVID
                 inx
                 inx ;Q6L
                 stx unrread1+1
+  !if poll_drive=1 {
                 stx unrread2+1
                 stx unrread3+1
-  !if check_checksum=1 {
+  } ;poll_drive
                 stx unrread4+1
+                stx unrread5+1
+  !if check_checksum=1 {
+                stx unrread6+1
   } ;check_checksum
 } ;enable_floppy
                 ldx #1
@@ -290,11 +298,7 @@ copydrv         stx blokhi
                 lda ROMIN
     } ;lc_bank
   } ;load_high
-  !if enable_write=1 {
-                ldx #3
-  } else { ;enable_write
-                ldx #2
-  } ;enable_write
+                ldx #>((bit2tbl-opendir)+$ff)
                 ldy #0
 -               lda (bloklo), y
 reladr          sta reloc, y
@@ -387,13 +391,13 @@ nextent         ldy #0
                 lda (bloklo), y
   !if (might_exist+allow_subdir)>0 {
                 and #$f0
-  } ;might_exist or allow_subdir
 
-  !if might_exist=1 {
+    !if might_exist=1 {
                 ;skip deleted entries without counting
 
                 beq ++
-  } ;might_exist
+    } ;might_exist
+  } ;might_exist or allow_subdir
 
   !if allow_subdir=1 {
                 ;subdirectory entries are seedlings
@@ -437,6 +441,7 @@ savetype
   !if might_exist=1 {
                 dec entries
                 bne ++
+nodisk
 unrdrvoff1=unrelocdsk+(*-reloc)
                 lda MOTOROFF
                 inc status
@@ -472,75 +477,76 @@ foundname       iny
                 stx entries
 
   !if enable_write=1 {
-                ;round requested size up to nearest sector
-                ;and cache requested size if writing
-
-                ldx sizehi
-                lda sizelo
-                beq +
-                inx
-+
-    !if aligned_read=0 {
                 ldy reqcmd
                 cpy #cmdwrite           ;control carry instead of zero
-    } ;aligned_read
-  } ;enable_write
+                bne +
 
-                ;cache EOF (file size)
+                ;round requested size up to nearest sector if writing
+                ;or nearest block if using aligned reads
 
-                ldy #EOF
-                lda (bloklo), y
-  !if enable_write=1 {
-                sta sizelo
-  } else { ;enable_write
-    !if aligned_read=0 {
-                sta sizelo
-    } else { ;aligned_read
-                tax
-    } ;aligned_read
-  } ;enable_write
-                iny
-                lda (bloklo), y
-                sta sizehi
-
-  !if enable_write=1 {
-    !if aligned_read=0 {
-                bcc +++
-    } ;aligned_read
-  } ;enable_write
-                ;round file size up to nearest sector
-                ;and check against requested size if writing
-
-  !if (enable_write+aligned_read)>0 {
-                beq +
-    !if enable_write {
                 lda sizelo
-                beq ++
-                lda #0
-+               sta sizelo
-    } else { ;enable_write
-                txa
-                beq ++
-+
-    } ;enable_write
+    !if aligned_read=0 {
+                beq +
                 inc sizehi
-++
+    } else { ;aligned_read
+                ldx sizehi
+                jsr round
+                sta sizehi
+                sec
+    } ;aligned_read
++
+  } ;enable_write
+
+                ;cache EOF (file size, loaded backwards)
+
+                ldy #EOF+1
+                lda (bloklo), y
+  !if (enable_write+aligned_read)>0 {
+                tax
+  } else { ;enable_write or aligned_read
+                sta sizehi
   } ;enable_write or aligned_read
-  !if enable_write=1 {
-    !if aligned_read=1 {
-                ldy reqcmd
                 dey
-                beq +++
+                lda (bloklo), y
+  !if (enable_write+aligned_read)>0 {
+    !if aligned_read=0 {
+                bcc ++
     } ;aligned_read
 
-                ;set write size to min(length, requested size)
+                ;round file size up to nearest sector if writing without aligned reads
+                ;or nearest block if using aligned reads
 
+                beq +
+    !if aligned_read=0 {
+                lda #0
+                inx
+    } else { ;aligned_read
+      !if enable_write=1 {
+                jsr round
+                tax
+      } else { ;enable_write
+                adc #$ff
+                txa
+                adc #1
+                and #$fe
+      } ;enable_write
+    } ;aligned_read
++
+
+                ;set requested size to min(length, requested size)
+
+    !if enable_write=1 {
                 cpx sizehi
-                bcs +++
-                stx sizehi
-
-+++
-  } ;enable_write
+                bcs +
+++              stx sizehi
+    } else { ;enable_write
+                sta sizehi
+    } ;enable_write
++
+  } ;enable_write or aligned_read
+  !if aligned_read=0 {
+                sta sizelo
+  } ;aligned_read
 
                 ;cache AUX_TYPE (load offset for binary files)
 
@@ -577,7 +583,7 @@ foundname       iny
 
   !if allow_subdir=1 {
                 plp
-                bpl +
+                bpl rdwrfile
                 php
                 jsr readdirsec
                 plp
@@ -585,13 +591,13 @@ foundname       iny
     !if override_adr=1 {
                 plp
     } ;override_adr
-                bcc +
+                bcc rdwrfile
                 jsr readdirsec
   } ;allow_subdir
 
                 ;restore load offset
 
-+
+rdwrfile
   !if override_adr=1 {
                 ldx ldrhi
                 lda ldrlo
@@ -600,9 +606,6 @@ foundname       iny
                 tax
                 pla
   } ;override_adr
-  !if enable_write=1 {
-                ldy reqcmd
-  } ;enable_write
 
   !if allow_subdir=1 {
                 ;check file type and fake size and load address for subdirectories
@@ -610,24 +613,22 @@ foundname       iny
                 bcc +
                 ldy #2
                 sty sizehi
-    !if enable_write=1 {
-                dey
-    } ;enable_write
                 ldx #>dirbuf
                 lda #<dirbuf
 +
   } ;allow_subdir
-  !if enable_write=1 {
-                sty command
-  } ;enable_write
                 sta adrlo
                 stx adrhi
 
-rdwrfile
   !if allow_aux=1 {
                 ldx auxreq
                 jsr setaux
   } ;allow_aux
+
+  !if enable_write=1 {
+                ldy reqcmd
+                sty command
+  } ;enable_write
 
 rdwrloop
   !if aligned_read=0 {
@@ -637,11 +638,7 @@ rdwrloop
                 ldx sizehi
                 cpx #2
                 bcc +
-    !if (enable_write+allow_subdir)>0 {
                 lda #0
-    } else { ;enable_write or allow_subdir
-                tya
-    } ;enable_write or allow_subdir
                 ldx #2
 +               sta secsize1
                 stx secsize2
@@ -774,14 +771,15 @@ unrread1=unrelocdsk+(*-reloc)
                 bpl -
                 rts
 
-readdirsel
-  !if enable_write=1 {
-                ldy #cmdread
-                sty command
-                dey
-  } else { ;enable_write
-                ldy #0
-  } ;enable_write
+  !if (enable_write+aligned_read)=2 {
+round           adc #$fe
+                txa
+                adc #1
+                and #$fe
+                rts
+  } ;enable_write and aligned_read
+
+readdirsel      ldy #0
                 sty adrlo
   !if aligned_read=0 {
                 sty secsize1
@@ -795,20 +793,38 @@ seldrive        lsr reqcmd
 unrdrvsel=unrelocdsk+(*-reloc)
                 cmp DRV0EN, y
   } ;allow_multi
-
-readdirsec
-unrdrvon=unrelocdsk+(*-reloc)
+  !if poll_drive=1 {
+                sty status
+unrdrvon1=unrelocdsk+(*-reloc)
                 ldy MOTORON
+unrread2=unrelocdsk+(*-reloc)
+-               ldy Q6L
+                bpl -
+unrread3=unrelocdsk+(*-reloc)
+-               cpy Q6L
+                bne readdirsec
+                inc status
+                bne -
+                pla
+                pla
+                jmp nodisk
+  } ;poll_drive
+
+readdirsec      ldy #>dirbuf
+                sty adrhi
   !if aligned_read=0 {
                 ldy #2
                 sty secsize2
   } ;aligned_read
-                ldy #>dirbuf
-                sty adrhi
+                ldy #cmdread
+                sty command
 
                 ;convert block number to track/sector
 
-seekrdwr        lsr
+seekrdwr
+unrdrvon2=unrelocdsk+(*-reloc)
+                ldy MOTORON
+                lsr
                 txa
                 ror
                 lsr
@@ -872,8 +888,8 @@ cmpsecrd        lda #$ff
 cmpsec
   !if enable_write=1 {
                 ldy command
-                dey ;cmp #cmdread
-                bne encsec              ;y=1
+                cpy #cmdwrite           ;we need Y=2 below
+                beq encsec
   } ;enable_write
 cmpsec2         cmp reqsec
                 beq readdata
@@ -885,14 +901,14 @@ cmpsec2         cmp reqsec
 readdata        jsr readd5aa
                 eor #$ad                ;zero A if match
 ;;                bne *                   ;lock if read failure
-unrread2=unrelocdsk+(*-reloc)
+unrread4=unrelocdsk+(*-reloc)
 -               ldx Q6L
                 bpl -
                 eor nibtbl-$96, x
                 sta bit2tbl-$aa, y
                 iny
                 bne -
-unrread3=unrelocdsk+(*-reloc)
+unrread5=unrelocdsk+(*-reloc)
 --              ldx Q6L
                 bpl --
                 eor nibtbl-$96, x
@@ -904,7 +920,7 @@ unrread3=unrelocdsk+(*-reloc)
     } else { ;aligned_read
                 bne --
     } ;aligned_read
-unrread4=unrelocdsk+(*-reloc)
+unrread6=unrelocdsk+(*-reloc)
 -               ldx Q6L
                 bpl -
                 eor nibtbl-$96, x
@@ -934,7 +950,7 @@ readret         inc adrhi
                 rts
 
   !if enable_write=1 {
-encsec          iny                     ;y=2
+encsec
 --              ldx #$aa
 -               dey
                 lda (adrlo), y
@@ -1091,9 +1107,7 @@ dataend         = nibtbl+106
 
 unrelochdd
 !pseudopc reloc {
-                ;read volume directory key block
-
-hddopendir
+hddopendir      ;read volume directory key block
 unrhddblocklo=unrelochdd+(*-reloc)
                 ldx #2
 unrhddblockhi=unrelochdd+(*-reloc)
@@ -1126,13 +1140,13 @@ hddnextent      ldy #0
                 lda (bloklo), y
   !if (might_exist+allow_subdir)>0 {
                 and #$f0
-  } ;might_exist or allow_subdir
 
-  !if might_exist=1 {
+    !if might_exist=1 {
                 ;skip deleted entries without counting
 
                 beq ++
-  } ;might_exist
+    } ;might_exist
+  } ;might_exist or allow_subdir
 
   !if allow_subdir=1 {
                 ;subdirectory entries are seedlings
@@ -1209,85 +1223,72 @@ hddfoundname    iny
                 stx entries
 
   !if enable_write=1 {
-                ;round requested size up to nearest block
-                ;and cache requested size if writing
+                ldy reqcmd
+                cpy #cmdwrite           ;control carry instead of zero
+                bne +
+
+                ;round requested size up to nearest block if writing
 
                 lda sizelo
+                ldx sizehi
                 jsr hddround
-                tax
-
-                ldy reqcmd
-    !if aligned_read=0 {
-                cpy #cmdwrite           ;control carry instead of zero
-    } else { ;aligned_read
-                dey                     ;cpy #cmdread
-                php
-    } ;aligned_read
+                sta sizehi
+                sec
++
   } ;enable_write
 
                 ;cache EOF (file size, loaded backwards)
 
                 ldy #EOF+1
                 lda (bloklo), y
-  !if (enable_write+aligned_read)=0 {
-                sta sizehi
-  } else { ;enable_write or aligned_read
-    !if enable_write=1 {
-                sta sizehi
-    } else { ;enable_write
+  !if (enable_write+aligned_read)>0 {
                 tax
-    } ;enable_write
+  } else { ;enable_write or aligned_read
+                sta sizehi
   } ;enable_write or aligned_read
                 dey
                 lda (bloklo), y
-  !if enable_write=1 {
-                sta sizelo
+  !if (enable_write+aligned_read)>0 {
     !if aligned_read=0 {
                 bcc ++
     } ;aligned_read
-  } else { ;enable_write
-    !if aligned_read=0 {
-                sta sizelo
-    } ;aligned_read
-  } ;enable_write
 
-  !if (enable_write+aligned_read)>0 {
-                ;round file size up to nearest block
-                ;and check against requested size if writing
+                ;round file size up to nearest block if writing or using aligned reads
 
-                ldy #2
+                beq +
     !if enable_write=1 {
+      !if aligned_read=1 {
+                sec
+      } ;aligned_read
                 jsr hddround
     } else { ;enable_write
-                adc #$fe
+                adc #$ff
                 txa
                 adc #1
                 and #$fe
     } ;enable_write
-                beq +
-                tay
     !if enable_write=1 {
-                lda #0
-+               sta sizelo
-    } else { ;enable_write
-+
+                tax
     } ;enable_write
-                sty sizehi
-  } ;enable_write or aligned_read
-
-  !if enable_write=1 {
-    !if aligned_read=1 {
-                plp
-                beq ++
+    !if aligned_read=0 {
+                lda #0
     } ;aligned_read
++
 
-                ;set write size to min(length, requested size)
+                ;set requested size to min(length, requested size)
 
+    !if enable_write=1 {
                 cpx sizehi
-                bcs ++
-                stx sizehi
-++
-  } ;enable_write
+                bcs +
+++              stx sizehi
+    } else { ;enable_write
+                sta sizehi
+    } ;senable_write
++
+  } ;enable_write or aligned_read
+  !if aligned_read=0 {
+             sta sizelo
+  } ;aligned_read
 
                 ;cache AUX_TYPE (load offset for binary files)
 
@@ -1324,7 +1325,7 @@ hddfoundname    iny
 
   !if allow_subdir=1 {
                 plp
-                bpl +
+                bpl hddrdwrfile
                 php
                 jsr hddreaddirsec
                 plp
@@ -1332,13 +1333,13 @@ hddfoundname    iny
     !if override_adr=1 {
                 plp
     } ;override_adr
-                bcc +
+                bcc hddrdwrfile
                 jsr hddreaddirsec
   } ;allow_subdir
 
                 ;restore load offset
 
-+
+hddrdwrfile
   !if override_adr=1 {
                 ldx ldrhi
                 lda ldrlo
@@ -1354,10 +1355,6 @@ hddfoundname    iny
                 bcc +
                 ldy #2
                 sty sizehi
-    !if enable_write=1 {
-                dey                     ;ldy #cmdread
-                sty reqcmd
-    } ;enable_write
                 ldx #>dirbuf
                 lda #<dirbuf
 +
@@ -1365,7 +1362,6 @@ hddfoundname    iny
                 sta adrlo
                 stx adrhi
 
-hddrdwrfile
   !if allow_aux=1 {
                 ldx auxreq
                 jsr hddsetaux
@@ -1453,7 +1449,7 @@ hddsetaux       sta CLRAUXRD, x
 
   !if enable_write=1 {
 hddround        adc #$fe
-                lda sizehi
+                txa
                 adc #1
                 and #$fe
                 rts
@@ -1461,6 +1457,10 @@ hddround        adc #$fe
 
 hddreaddirsel   ldy #0
                 sty adrlo
+  !if might_exist=1 {
+                sty status
+  } ;might_exist
+
   !if allow_multi=1 {
                 asl reqcmd
                 lsr reqcmd
@@ -1469,13 +1469,12 @@ hddreaddirsel   ldy #0
 hddreaddirsec   ldy #>dirbuf
                 sty adrhi
                 ldy #cmdread
-  !if enable_write=0 {
-                sty command
-  } ;enable_write
-
-hddseekrdwr
   !if enable_write=1 {
+hddseekrdwr
+  } ;enable_write
                 sty command
+  !if enable_write=0 {
+hddseekrdwr
   } ;enable_write
                 stx bloklo
                 sta blokhi
