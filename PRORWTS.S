@@ -492,7 +492,6 @@ foundname       iny
                 ldx sizehi
                 jsr round
                 sta sizehi
-                sec
     } ;aligned_read
 +
   } ;enable_write
@@ -509,40 +508,37 @@ foundname       iny
                 dey
                 lda (bloklo), y
   !if (enable_write+aligned_read)>0 {
-    !if aligned_read=0 {
-                bcc ++
-    } ;aligned_read
 
                 ;round file size up to nearest sector if writing without aligned reads
                 ;or nearest block if using aligned reads
 
-                beq +
     !if aligned_read=0 {
-                lda #0
+                bcc ++
+                beq +
                 inx
+                lda #0
     } else { ;aligned_read
       !if enable_write=1 {
                 jsr round
                 tax
       } else { ;enable_write
-                adc #$ff
+                adc #$fe
                 txa
                 adc #1
                 and #$fe
       } ;enable_write
     } ;aligned_read
-+
 
                 ;set requested size to min(length, requested size)
 
     !if enable_write=1 {
-                cpx sizehi
++               cpx sizehi
                 bcs +
 ++              stx sizehi
++
     } else { ;enable_write
                 sta sizehi
     } ;enable_write
-+
   } ;enable_write or aligned_read
   !if aligned_read=0 {
                 sta sizelo
@@ -772,7 +768,8 @@ unrread1=unrelocdsk+(*-reloc)
                 rts
 
   !if (enable_write+aligned_read)=2 {
-round           adc #$fe
+round           clc
+                adc #$ff
                 txa
                 adc #1
                 and #$fe
@@ -1233,7 +1230,9 @@ hddfoundname    iny
                 ldx sizehi
                 jsr hddround
                 sta sizehi
+    !if aligned_read=0 {
                 sec
+    } ;aligned_read
 +
   } ;enable_write
 
@@ -1255,36 +1254,26 @@ hddfoundname    iny
 
                 ;round file size up to nearest block if writing or using aligned reads
 
-                beq +
     !if enable_write=1 {
-      !if aligned_read=1 {
-                sec
-      } ;aligned_read
                 jsr hddround
-    } else { ;enable_write
-                adc #$ff
-                txa
-                adc #1
-                and #$fe
-    } ;enable_write
-    !if enable_write=1 {
                 tax
-    } ;enable_write
-    !if aligned_read=0 {
+      !if aligned_read=0 {
                 lda #0
-    } ;aligned_read
-+
+      } ;aligned_read
 
                 ;set requested size to min(length, requested size)
 
-    !if enable_write=1 {
                 cpx sizehi
                 bcs +
 ++              stx sizehi
-    } else { ;enable_write
-                sta sizehi
-    } ;senable_write
 +
+    } else { ;enable_write
+                adc #$fe
+                txa
+                adc #1
+                and #$fe
+                sta sizehi
+    } ;enable_write
   } ;enable_write or aligned_read
   !if aligned_read=0 {
              sta sizelo
@@ -1448,7 +1437,8 @@ hddsetaux       sta CLRAUXRD, x
   } ;aligned_read
 
   !if enable_write=1 {
-hddround        adc #$fe
+hddround        clc
+                adc #$ff
                 txa
                 adc #1
                 and #$fe
