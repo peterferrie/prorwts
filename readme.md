@@ -1,80 +1,80 @@
-open/read/write any binary file in ProDOS filesystem.
-runs from any directory on floppy or hard disk.
-searches the file system for the requested file, can even look inside subdirectories.
-only 5 sectors long in memory (7 sectors if writing enabled).
-
-usage:
-
-jsr init ;one-time call to unhook ProDOS, detect drive type, and relocate code to top of memory
-
-;open and read a file without address override or writing enabled
-lda #<file_to_read
-sta namlo
-lda #>file_to_read
-sta namhi
-jsr opendir ;open and read entire file into memory at its load address
-
-;open and read a file with address override but without writing enabled
-lda #<file_to_read
-sta namlo
-lda #>file_to_read
-sta namhi
-lda #<place_to_read
-sta adrlo
-lda #>place_to_read
-sta adrhi
-jsr opendir ;open and read entire file into memory to the specified load address
-
-;open and read a subdirectory without address override or writing enabled
-lda #<dir_to_read
-sta namlo
-lda #>dir_to_read
-sta namhi
-jsr opendir ;open and read subdirectory to top of memory for later
-;issue another open request to find a file inside it
-lda #<file_to_read
-sta namlo
-lda #>file_to_read
-sta namhi
-jsr readdir ;read directory without opening it again
-
-;open and read a file with writing enabled but without address override
-lda #<file_to_read
-sta namlo
-lda #>file_to_read
-sta namhi
-lda #1
-sta reqcmd
-jsr opendir ;open and read entire file into memory at its load address
-
-;open and write a file without address override
-lda #<file_to_write
-sta namlo
-lda #>file_to_write
-sta namhi
-lda #0
-sta sizelo
-lda #>bytes_to_write
-sta sizehi
-lda #2
-jsr opendir ;open and write bytes from memory to file load address
-
-;open and write a file with address override
-lda #<file_to_write
-sta namlo
-lda #>file_to_write
-sta namhi
-lda #0
-sta sizelo
-lda #>bytes_to_write
-sta sizehi
-lda #<place_to_write
-sta adrlo
-lda #>place_to_write
-sta adrhi
-lda #2
-jsr opendir ;open and write bytes from memory to specified load address
-
-
-format of request name is Pascal-style (length, text):
+open/read/write any binary file in ProDOS filesystem.<br>
+runs from any directory on floppy or hard disk.<br>
+searches the file system for the requested file, can even look inside subdirectories.<br>
+only 5 sectors long in memory (7 sectors if writing enabled).<br>
+<br>
+usage:<br>
+<br>
+jsr init ;one-time call to unhook ProDOS, detect drive type, and relocate code to top of memory<br>
+<br>
+;open and read a file without address override or writing enabled<br>
+lda #<file_to_read<br>
+sta namlo<br>
+lda #>file_to_read<br>
+sta namhi<br>
+jsr opendir ;open and read entire file into memory at its load address<br>
+<br>
+;open and read a file with address override but without writing enabled<br>
+lda #<file_to_read<br>
+sta namlo<br>
+lda #>file_to_read<br>
+sta namhi<br>
+lda #<place_to_read<br>
+sta adrlo<br>
+lda #>place_to_read<br>
+sta adrhi<br>
+jsr opendir ;open and read entire file into memory to the specified load address<br>
+<br>
+;open and read a subdirectory without address override or writing enabled<br>
+lda #<dir_to_read<br>
+sta namlo<br>
+lda #>dir_to_read<br>
+sta namhi<br>
+jsr opendir ;open and read subdirectory to top of memory for later<br>
+;issue another open request to find a file inside it<br>
+lda #<file_to_read<br>
+sta namlo<br>
+lda #>file_to_read<br>
+sta namhi<br>
+jsr readdir ;read directory without opening it again<br>
+<br>
+;open and read a file with writing enabled but without address override<br>
+lda #<file_to_read<br>
+sta namlo<br>
+lda #>file_to_read<br>
+sta namhi<br>
+lda #1<br>
+sta reqcmd<br>
+jsr opendir ;open and read entire file into memory at its load address<br>
+<br>
+;open and write a file without address override<br>
+lda #<file_to_write<br>
+sta namlo<br>
+lda #>file_to_write<br>
+sta namhi<br>
+lda #0<br>
+sta sizelo<br>
+lda #>bytes_to_write<br>
+sta sizehi<br>
+lda #2<br>
+jsr opendir ;open and write bytes from memory to file load address<br>
+<br>
+;open and write a file with address override<br>
+lda #<file_to_write<br>
+sta namlo<br>
+lda #>file_to_write<br>
+sta namhi<br>
+lda #0<br>
+sta sizelo<br>
+lda #>bytes_to_write<br>
+sta sizehi<br>
+lda #<place_to_write<br>
+sta adrlo<br>
+lda #>place_to_write<br>
+sta adrhi<br>
+lda #2<br>
+jsr opendir ;open and write bytes from memory to specified load address<br>
+<br>
+<br>
+format of request name is Pascal-style (length, text):<br>
 e.g. !raw 5, "MYDIR" or !raw 6, "MYFILE" or !raw 14, "QKUMBAROXURSOX"
